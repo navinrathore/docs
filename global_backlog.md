@@ -9,3 +9,11 @@
 - [ ] Agentic RAG & Dynamic Prompt Retrieval Architecture
 - [ ] Agent Memory Systems & State Persistence (Episodic/Procedural Memory & Crash Recovery)
 - [ ] Agentic Evaluation & Trajectory Evals Frameworks
+
+
+
+# my tasks
+
+- [] converting quantization models from bitsandbytes to exllama
+- [] implement a service for exllm model inference 
+- [] implement a monitoring dashboard for exllm model inference

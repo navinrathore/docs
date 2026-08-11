@@ -179,6 +179,21 @@ $$\mathbf{\text{Grand Total Params}} = \underbrace{2 \cdot V \cdot H}_{\text{Voc
 ### RAG (Retrieval-Augmented Generation)
 - **Definition:** Dynamically retrieving relevant document chunks or SOP guidelines from a vector/text index and injecting them into the prompt before model generation.
 
+### Vector Store
+- **Definition:** A database optimized for storing and querying high-dimensional vector embeddings (e.g., Chroma, pgvector, Pinecone) using similarity search metrics like cosine similarity.
+
+### Chunking Strategies
+- **Definition:** The process of splitting large documents into smaller text segments before embedding. Can be **Fixed-Size** (e.g., 512 tokens with 50-token overlap) or **Semantic** (splitting at logical boundaries like paragraphs or markdown headers).
+
+### Intent Routing
+- **Definition:** A classifier or supervisor layer that evaluates the user's prompt to determine the optimal retrieval strategy (e.g., chunk-level vector search vs. full-document retrieval) before executing the query.
+
+### Hybrid Context Approach
+- **Definition:** An architectural pattern that uses fast vector retrieval (RAG) to locate relevant documents, and then leverages massive LLM context windows to inject the *entire* document for holistic synthesis rather than just isolated chunks.
+
+### LLM-as-Judge
+- **Definition:** Using a secondary LLM to automatically evaluate, grade, or fact-check the relevance and accuracy of retrieved context and the final generated response to prevent hallucinations.
+
 ---
 
 ## 6. Alphabetical Quick Reference Table
@@ -186,11 +201,15 @@ $$\mathbf{\text{Grand Total Params}} = \underbrace{2 \cdot V \cdot H}_{\text{Voc
 | Term | Category | Key Formula / Definition | Primary Impact |
 | :--- | :--- | :--- | :--- |
 | **BPE** | Tokenization | Byte-Pair Encoding algorithm | Sub-word segmentation |
+| **Chunking** | RAG | Splitting docs into smaller segments | Impacts vector search relevance |
 | **Compute-Bound** | Hardware | Bottlenecked by TFLOPS capacity | Governs Prefill Phase speed |
 | **Dense Model** | Architecture | 100% weights active per token | High VRAM & predictable latency |
 | **FLOPs** | Compute | $2 \times N^2 \times H$ (Self-attention) | Measures arithmetic work |
 | **GBNF** | Inference | Backus-Naur Form grammar constraint | Guarantees structured JSON |
+| **Hybrid Context** | RAG | Full-doc stuffing + RAG | Balances speed and deep synthesis |
+| **Intent Routing** | Agentic AI | Pre-filtering queries to tools | Directs retrieval & execution strategy |
 | **KV Cache** | Memory | Stores $K, V$ attention tensors | Prevents re-computing past turns |
+| **LLM-as-Judge** | Evaluation | Secondary LLM grading outputs | Automates factual RAG checks |
 | **Memory-Bound** | Hardware | Bottlenecked by VRAM bandwidth | Governs Generation speed (t/s) |
 | **MoE Model** | Architecture | Dynamic routing to active experts | Low per-token compute cost |
 | **NIAH** | Context | Needle-In-A-Haystack benchmark | Tests long-context recall accuracy |
@@ -199,4 +218,5 @@ $$\mathbf{\text{Grand Total Params}} = \underbrace{2 \cdot V \cdot H}_{\text{Voc
 | **ReAct** | Agentic AI | Reasoning $\to$ Action $\to$ Observation | Foundational agent execution loop |
 | **SOP** | Agentic AI | Standard Operating Procedure | Declarative prompt behavioral guide |
 | **TTFT** | Performance | Time-To-First-Token latency | Initial user responsiveness metric |
+| **Vector Store** | RAG | Database for high-dim vectors | Enables fast semantic search |
 | **Vocabulary Size ($V$)** | Tokenization | Total unique tokens in dictionary | Larger $V$ = Fewer tokens per prompt |

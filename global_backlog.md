@@ -9,6 +9,8 @@
 - [ ] Agentic RAG & Dynamic Prompt Retrieval Architecture
 - [ ] Agent Memory Systems & State Persistence (Episodic/Procedural Memory & Crash Recovery)
 - [ ] Agentic Evaluation & Trajectory Evals Frameworks
+- [ ] Knowledge Graph & GraphRAG Integration: Build embedded property graph (Kùzu/NetworkX) pipelines for multi-hop legal reasoning in LawNidhi and hierarchical community summaries in Open-NotebookLM.
+- [ ] Long-Term Semantic Memory Graph for Autonomous Agents (Entity/Fact persistence across ReAct loops).
 
 
 

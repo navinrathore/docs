@@ -1,5 +1,8 @@
 # Software Design Document (SDD) Approach
 
+> [!NOTE]
+> For the agentic AI era comparison of **Spec-Driven Development (SDD)** against **Eval-Driven Development (EDD)**, **DSPy program compilation**, and **Formal Verification (Lean 4)**, see [sdd_and_frontier_development_paradigms.md](file:///home/navin/work/AI/docs/sdd_and_frontier_development_paradigms.md).
+
 ## 1. Overview and Core Philosophy
 The Software Design Document (SDD) approach is a disciplined methodology for planning and documenting the technical design of a system before any code is written. It translates user and system requirements (often defined in a Software Requirements Specification or SRS) into a concrete, executable blueprint for engineering teams.
 

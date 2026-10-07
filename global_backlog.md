@@ -9,6 +9,7 @@
 - [ ] Agentic RAG & Dynamic Prompt Retrieval Architecture
 - [ ] Agent Memory Systems & State Persistence (Episodic/Procedural Memory & Crash Recovery)
 - [ ] Agentic Evaluation & Trajectory Evals Frameworks
+- [ ] **[2026-10-07]** Automated RAG Evaluation & CI/CD Benchmarking Harness: Integrate **Ragas** (evaluating RAG Triad: Faithfulness, Answer Relevance, Context Precision, and Context Recall) with synthetic test-set generation for regression testing across retrieval pipelines (LawNidhi / Enterprise RAG).
 - [ ] Knowledge Graph & GraphRAG Integration: Build embedded property graph (Kùzu/NetworkX) pipelines for multi-hop legal reasoning in LawNidhi and hierarchical community summaries in Open-NotebookLM.
 - [ ] Long-Term Semantic Memory Graph for Autonomous Agents (Entity/Fact persistence across ReAct loops).
 
@@ -19,3 +20,5 @@
 - [] converting quantization models from bitsandbytes to exllama
 - [] implement a service for exllm model inference 
 - [] implement a monitoring dashboard for exllm model inference
+- [ ] Implement SGLang-based high-performance model serving daemon & engine with RadixAttention KV reuse (`LocalModelsProject`)
+- [ ] Implement automated Ragas evaluation script & synthetic test-data generation harness for RAG pipelines

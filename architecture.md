@@ -2,6 +2,22 @@
 
 This document records overarching architectural decisions, design patterns, and systemic blueprints adopted across projects in this repository.
 
+## Table of Contents
+1. [Agent Memory Hierarchy & Lifecycle](#1-agent-memory-hierarchy--lifecycle)
+2. [Interrupt-Save-Notify-Resume Pattern (Sovereign HITL Gate)](#2-interrupt-save-notify-resume-pattern-sovereign-hitl-gate)
+3. [Hybrid Supervisory Wrapper Pattern (Rule 11)](#3-hybrid-supervisory-wrapper-pattern-rule-11)
+4. [FastMCP Stdio Server & Hybrid Transport Pattern](#4-fastmcp-stdio-server--hybrid-transport-pattern)
+5. [Architectural Triad: Deterministic Fallbacks vs. Fail-Closed Error Handling](#5-architectural-triad-deterministic-fallbacks-vs-fail-closed-error-handling)
+6. [Universal Remote Notification Gateway & Asynchronous HITL Bridge](#6-universal-remote-notification-gateway--asynchronous-hitl-bridge)
+7. [Universal Provider-Native Structured Output & Adaptive Tri-Mode Engine](#7-universal-provider-native-structured-output--adaptive-tri-mode-engine)
+8. [OutputGuard & The Payload Offloading (Data Pointer) Pattern](#8-outputguard--the-payload-offloading-data-pointer-pattern)
+9. [Dynamic Skill Architecture: Cascading Hybrid Routing & Progressive Disclosure](#9-dynamic-skill-architecture-cascading-hybrid-routing--progressive-disclosure)
+10. [Sub-Agent Execution Engine & Context Sandboxing Pattern](#10-sub-agent-execution-engine--context-sandboxing-pattern)
+11. [Resilient Async Tool Dispatcher & Bounded Concurrency](#11-resilient-async-tool-dispatcher--bounded-concurrency)
+12. [Declarative OpenAPI Tool Auto-Ingestion & Schema Synthesis](#12-declarative-openapi-tool-auto-ingestion--schema-synthesis)
+13. [Deterministic Code Sanitization & AST Syntax Verification](#13-deterministic-code-sanitization--ast-syntax-verification)
+14. [Non-Consecutive Cyclic Repetition Detection](#14-non-consecutive-cyclic-repetition-detection)
+
 ---
 
 ## 1. Agent Memory Hierarchy & Lifecycle
@@ -295,6 +311,154 @@ The architecture solves this via **Context Sandboxing with Sub-Agent Tool Bridgi
 - **Sub-Agent as an Async Tool**: The entire sub-agent lifecycle is encapsulated as a standard async tool function on the parent dispatcher.
 - **Concurrent Sub-Agents**: Because tools run asynchronously through `AsyncToolDispatcher`, the parent agent can launch multiple sub-agents concurrently (e.g. `delegate_to_data_analyst` and `delegate_to_security_scanner` running in parallel via `asyncio.gather`).
 - **Complete Context Isolation**: Child reasoning turns, intermediate errors, and raw outputs are completely sandboxed. The parent agent's context receives strictly the final synthesized answer.
+
+---
+
+## 11. Resilient Async Tool Dispatcher & Bounded Concurrency
+
+**[2026-11-23]**  
+*Source: `projects/Agents/core/dispatcher.py`*
+
+In production agent architectures, executing tools synchronously or in an unbounded parallel loop creates severe bottlenecks: a single hanging tool freezes the agent, and calling 10 tools simultaneously can exhaust database connection pools or trigger API rate limits.
+
+The `AsyncToolDispatcher` provides a robust, production-grade tool execution runtime:
+
+```
+[Agent Emits N Tool Calls] ──► [AsyncToolDispatcher]
+                                     │
+                                     ├── [Bounded Semaphore] (max_concurrency=4)
+                                     │     Prevents connection pool exhaustion
+                                     │
+                                     ├── [Per-Tool Timeout Guard] (asyncio.wait_for)
+                                     │     Isolates slow tools (e.g. 10s ceiling)
+                                     │
+                                     ├── [Exception Shielding] (return_exceptions=True)
+                                     │     One tool failure does NOT abort sibling tools
+                                     │
+                                     └── [Order-Preserving Result Collector]
+                                           Maps results back to exact tool_call_id
+```
+
+### 1. Key Architectural Principles
+- **Semaphore-Bounded Concurrency**: Tools execute concurrently via `asyncio.gather`, but concurrency is strictly throttled by an `asyncio.Semaphore(max_concurrency)` to prevent thread, file descriptor, or network socket exhaustion.
+- **Per-Tool Timeout Isolation**: Every tool call is wrapped in `asyncio.wait_for(coro, timeout=...)`. If a third-party API or database query stalls, it times out independently and returns a structured error string, allowing the agent to diagnose the failure without crashing.
+- **Exception Shielding & Structured Result Guarantees**: Dispatcher never allows unhandled tool exceptions to bubble up and kill the agent process. Exceptions are captured, formatted into `ToolExecutionResult(success=False, error=str(e))`, and fed cleanly into the context.
+- **Unified Transport Abstraction**: The dispatcher seamlessly mounts:
+  1. Standard Python sync and async functions (automatically offloaded to thread pool via `asyncio.to_thread` if sync).
+  2. FastMCP stdio/SSE tools (`register_mcp_tool`).
+  3. HITL approval-gated actions (`require_approval=True`, `risk_predicate`).
+  4. Sub-agent child ReAct loops.
+  5. `OutputGuard` automatic payload truncation and offloading.
+
+---
+
+## 12. Declarative OpenAPI Tool Auto-Ingestion & Schema Synthesis
+
+**[2026-11-23]**  
+*Source: `projects/Agents/core/openapi_loader.py`*
+
+Writing custom Python tool wrappers by hand for hundreds of corporate REST endpoints is brittle, slow, and error-prone. 
+
+The `OpenAPIToolLoader` dynamically ingests OpenAPI 3.0/3.1 and Swagger specs (JSON/YAML) and compiles them into typed, validated agent tools:
+
+```
+[OpenAPI 3.0 / 3.1 Spec (JSON/YAML)]
+                 │
+                 ▼
+       [OpenAPIToolLoader]
+                 │
+                 ├── 1. Path & Parameter Extraction
+                 │      (query, path, header, requestBody)
+                 │
+                 ├── 2. JSON Schema Parameter Synthesis
+                 │      (Compiles parameters into strict OpenAI/Anthropic schemas)
+                 │
+                 ├── 3. Dynamic HTTP Execution Handlers
+                 │      (Injects URL path parameters, headers, and payloads via httpx)
+                 │
+                 └── 4. Enterprise Safety Policies:
+                        ├── read_only=True (Filters to GET operations only)
+                        ├── tag_whitelist / path_filter (Scoped access)
+                        └── dry_run=True (Simulates requests without network side-effects)
+```
+
+### 1. Key Architectural Principles
+- **Schema Auto-Compilation**: The loader maps OpenAPI parameter types (`string`, `integer`, `array`, `object`) and nested schema components into standard JSON Schema parameter dictionaries compatible with OpenAI function calling and Anthropic tool schemas.
+- **Dynamic Callable Generation**: Each operation is converted into a native async execution callable that automatically injects URL path variables (e.g. `/users/{id}` $\rightarrow$ `/users/123`), formats query parameters, and serializes request bodies.
+- **Configurable Synthesis Modes**:
+  - **1:1 Endpoint Mapping**: Every endpoint operation (`getUser`, `createOrder`) becomes a distinct, named agent tool.
+  - **Dynamic API Runner**: Ingests the spec as an API catalog and exposes a single generic `call_api(path, method, params)` tool, ideal for frontier models navigating vast API surfaces without bloating tool definitions.
+- **Safety by Default**: Built-in support for `read_only=True` enforces that mutation methods (`POST`, `PUT`, `DELETE`, `PATCH`) are excluded at ingestion time, mathematically preventing destructive operations.
+
+---
+
+## 13. Deterministic Code Sanitization & AST Syntax Verification
+
+**[2026-11-23]**  
+*Source: `projects/Agents/core/sanitizer.py`*
+
+Autonomous code-generation and data-science agents frequently receive outputs where the LLM wrapped code in conversational preamble (`"Here is the script you requested:"`), trailing commentary, multi-level markdown fences, or shell wrappers (`cat << 'EOF'`). Passing raw LLM responses to a Python interpreter or bash shell results in frequent syntax failures.
+
+The `CodeSanitizer` provides a deterministic pipeline for extracting, cleaning, and verifying code before execution:
+
+```
+[Raw LLM Response]
+        │
+        ├── 1. Line Ending & Indentation Normalization
+        │      (Preserves relative indent across lines before dedenting)
+        │
+        ├── 2. Multi-Backtick Fence Extraction via Named Backreferences
+        │      (?P<ticks>`{3,})(?:[a-zA-Z0-9_-]+)?\n(?P<code>[\s\S]*?)\n(?P=ticks)
+        │      (Prevents premature termination on nested 3-backtick docstrings)
+        │
+        ├── 3. Conversational Fluff & Heredoc Stripping
+        │      (Removes "Here is the code:", "cat << 'EOF'", trailing explanations)
+        │
+        └── 4. Static Python AST Verification (ast.parse)
+               ├── Syntax Valid?   ──► SanitizationResult(success=True, code=clean_code)
+               └── Syntax Error?   ──► SanitizationResult(success=False, error="SyntaxError: ...")
+```
+
+### 1. Key Architectural Principles
+- **Nested Fence Safety**: By using regex named backreferences (`(?P<ticks>`{3,})...(?P=ticks)`), code blocks wrapped in 4 or 5 backticks that contain inner 3-backtick markdown blocks are extracted without premature truncation.
+- **Indentation Preservation**: Stripping leading whitespace from the first line destroys the common indentation prefix required by `textwrap.dedent()`. The sanitizer preserves relative line indentation prior to conversational extraction.
+- **Pre-Flight AST Parsing**: Rather than executing unverified code and failing inside an expensive sandbox or subprocess, `ast.parse` validates Python syntax in sub-millisecond static analysis, catching syntax errors before execution.
+
+---
+
+## 14. Non-Consecutive Cyclic Repetition Detection
+
+**[2026-11-23]**  
+*Source: `projects/Agents/core/utils.py`*
+
+A major failure mode in autonomous ReAct loops is the **ping-pong error trap**: the agent encounters an error $A$, attempts an alternative approach that causes error $B$, and then returns to the first approach, repeating $A \rightarrow B \rightarrow A \rightarrow B$ until its context window or credit balance is exhausted.
+
+Traditional repetition detectors only check consecutive identical errors (e.g., $A \rightarrow A \rightarrow A$) and completely miss alternating or multi-step cycles.
+
+The upgraded `RepetitionDetector` implements **Sliding-Window Hash-Based Cycle Detection**:
+
+```
+Agent Tool Output
+        │
+        ▼
+[Normalize & Hash] ──► SHA-256 Digest (e.g. "a3f5...e9")
+                             │
+                             ▼
+                    [Sliding Window Deque] (maxlen = 10)
+                    [ h(A), h(B), h(C), h(A), h(B), h(A) ]
+                             │
+                             ▼
+                    [Counter Frequency Check]
+                    Frequency of h(A) in window >= threshold (3)?
+                    ├── YES ──► ABORT LOOP (Cyclic Repetition Trap Detected)
+                    └── NO  ──► Continue Loop
+```
+
+### 1. Key Architectural Principles
+- **Normalization Before Hashing**: Strips timestamps, memory addresses (e.g., `<object at 0x7f...>`), and variable whitespace before hashing so identical semantic errors produce identical SHA-256 digests.
+- **Non-Consecutive Detection**: By tracking hash frequencies across an in-memory sliding window (`deque(maxlen=window_size)` + `collections.Counter`), multi-step cycles ($A \rightarrow B \rightarrow A \rightarrow B$) are caught reliably regardless of sequence order.
+- **Loop Circuit Breaker**: Once the repetition threshold is breached, the loop terminates immediately with an actionable warning, preventing token burn and API rate-limiting (enforcing Rule 1 and Rule 9).
+
 
 
 

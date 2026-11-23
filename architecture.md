@@ -138,4 +138,165 @@ Checkpointer Hydrates Thread & Unpauses LangGraph Execution
 - **Webhook as the Integration Bridge (iPaaS)**: Rather than writing bespoke integrations for Slack, Teams, Discord, and WhatsApp inside Python agent code, the `WebhookChannel` points to an automation engine (e.g. self-hosted n8n or Zapier). The iPaaS handles formatting, authentication, and multi-channel fanout, while Python agent code remains completely isolated from third-party API drift.
 - **Asynchronous Inbound Resumption**: Inbound approval callbacks are handled by an independent, non-blocking HTTP bridge (`scripts/approval_server.py`). The approval server translates external webhooks or inline button taps into `ctrl.resume_workflow(thread_id, payload)`, allowing workflows to pause safely for minutes, hours, or days without burning process memory or compute.
 
+---
+
+## 7. Universal Provider-Native Structured Output & Adaptive Tri-Mode Engine
+
+**[2026-11-18]**  
+*Source: `projects/Agents/core/llm_clients.py`, `projects/hitl_email_agent/src/hitl_agent/llm.py`*
+
+In production agentic loops, relying on plain text prompting and post-hoc regex or string extraction to obtain structured JSON is an antipattern. When errors compound across a 10-step agent loop, even a 5% parsing error rate results in a $\approx 40\%$ failure rate ($0.95^{10} \approx 60\%$).
+
+To ensure zero parsing errors while preserving provider agnosticism and open-source runtime flexibility, the architecture establishes a **Universal Tri-Mode Structured Output Engine**:
+
+```
+client.generate_structured(messages, schema=MySchema, mode="auto"|"native"|"prompt_injection")
+                       │
+                       ▼
+          [Check Effective Mode]
+          ├── "native" / "auto" ──► Attempt Provider-Level Constrained Decoding
+          │                           ├── OpenAI / HF Router / vLLM:
+          │                           │     response_format={"type": "json_schema", "strict": True}
+          │                           │     (pre-processed with prepare_strict_json_schema)
+          │                           ├── Anthropic Claude:
+          │                           │     Forced Tool Calling (tools=[schema], tool_choice=schema)
+          │                           └── MockLLMClient:
+          │                                 Direct JSON validation & mode tracking
+          │
+          └── If "auto" & Endpoint Rejects (e.g. 400 Bad Request / Unsupported Parameter)
+              OR if mode == "prompt_injection":
+                       │
+                       ▼
+              [Graceful Fallback Mode]
+              Inject JSON Schema into Prompt + StructuredOutputParser + Single-Turn Repair Loop
+```
+
+### 1. Key Architectural Principles
+- **Grammar-Guided Decoding at the Boundary**: For providers and runtimes supporting constrained decoding (OpenAI, vLLM via Outlines/XGrammar, Ollama, Hugging Face Router), the schema is passed via `response_format`. The inference engine masks illegal logits to $-\infty$ at token-sampling time, mathematically preventing syntax or field errors.
+- **Provider-Agnostic Adapter Translation**:
+  - **OpenAI / OpenAI-Compatible (vLLM / HF Router)**: Maps Pydantic schema to OpenAI `json_schema` with `strict: True`.
+  - **Anthropic Claude**: Anthropic lacks a native top-level `json_schema` response format; the engine automatically maps the Pydantic schema to a forced tool definition (`tools=[...]`, `tool_choice={"type": "tool", "name": schema.__name__}`).
+- **Strict Schema Invariants (`prepare_strict_json_schema`)**: OpenAI strict mode enforces rigorous rules that vanilla Pydantic schemas do not supply by default. The recursive pre-processor ensures:
+  1. `additionalProperties: False` is added to all object nodes.
+  2. All properties declared in `properties` are explicitly added to `required` (ensuring optional fields use nullable unions rather than omitted keys).
+- **Adaptive Fallback Defense ("Auto" Mode)**: If an external OpenAI-compatible router or local model server rejects `response_format` or strict grammar masking with a `400 Bad Request`, `mode="auto"` logs a warning and transparently falls back to prompt injection + JSON repair without terminating the agent workflow.
+- **Static Token Fast-Forwarding (Compute Optimization)**: When using constrained decoding, predictable schema boundaries (e.g., `", "field": `) have only one legal transition in the DFA. Production inference engines bypass GPU forward passes for these static paths and append them directly to the KV cache, achieving 30–50% latency and compute cost savings.
+- **Chronological Schema Design (The Reasoning Buffer)**: Due to causal autoregressive attention ($P(t_k \mid t_{<k})$), schemas must order fields chronologically: `thought_process` / `reasoning` (unconstrained strings) must precede `decision` / `actions` (constrained enums). This populates the model's KV cache with analytical working memory before it samples final actions.
+
+---
+
+## 8. OutputGuard & The Payload Offloading (Data Pointer) Pattern
+
+**[2026-11-23]**  
+*Source: `projects/Agents/core/output_guard.py`, `projects/Agents/core/pointer_tools.py`, `projects/Agents/core/dispatcher.py`*
+
+In production autonomous agent loops, tools frequently produce massive outputs (megabytes of SQL records, API JSON dumps, or full file trees). Dumping these raw strings directly into LLM context causes severe **Context Satiation**, massive token costs, and attention dilution.
+
+To solve this deterministically, the architecture implements the **Payload Offloading Pattern**:
+
+```
+[Tool Execution] ──► Raw Output (e.g. 150 KB / 5000 lines)
+                             │
+                             ▼
+                    [OutputGuard Engine]
+                    ├── Output <= Threshold ──► Passthrough to Context
+                    └── Output > Threshold  ──► Offload & Truncate:
+                                                 ├── 1. Persist lossless payload to disk
+                                                 │      (vault/pointers/{sha256}.txt)
+                                                 ├── 2. Generate DataPointer manifest
+                                                 │      (pointer_id, byte_size, line_count, preview)
+                                                 └── 3. Smart Truncate for LLM Context:
+                                                        [Head Lines (preserved)]
+                                                        [... N lines omitted (DataPointer: id) ...]
+                                                        [Tail Lines (preserved)]
+                                                              │
+                                                              ▼
+                                                   [Selective Inspection Tools]
+                                                   ├── read_pointer_slice(pointer_id, offset, limit)
+                                                   ├── grep_pointer(pointer_id, regex)
+                                                   └── query_pointer_json(pointer_id, jsonpath)
+```
+
+### 1. Key Architectural Principles
+- **Smart Head/Tail Preservation**: Most operational diagnostic signals occur at the start (headers, schema definitions) or at the end (summary counts, error stacks). The truncator keeps both and cleanly displays omitted statistics.
+- **Content-Addressable Storage**: Payloads are indexed by their SHA-256 hash. If duplicate payloads are produced across turns, they deduplicate automatically without redundant storage.
+- **Pointers as First-Class Citizens**: The LLM receives a structured `DataPointer` reference. When deeper inspection is needed, it uses lightweight pointer query tools (`read_pointer_slice`, `grep_pointer`, `query_pointer_json`) to pull only relevant micro-slices into working memory.
+
+---
+
+## 9. Dynamic Skill Architecture: Cascading Hybrid Routing & Progressive Disclosure
+
+**[2026-11-23]**  
+*Source: `projects/Agents/core/skills.py`*
+
+Static system prompts containing all possible instructions and tool definitions fail at enterprise scale. Loading 50+ tool schemas consumes tens of thousands of tokens per turn and causes tool-hallucination.
+
+The architecture decouples tools and operating procedures into self-contained **Skill Packages** activated via a **Cascading Hybrid Router**:
+
+```
+User Query: "Check customer churn rate in Postgres"
+                      │
+                      ▼
+          [Cascading Hybrid Router]
+          ├── Tier 1: Deterministic Fast Path (Sub-millisecond, $0 Token Tax)
+          │           Evaluate trigger keywords/prefixes from SKILL.md frontmatter
+          │           Match Found? ──► Activate SkillPackage
+          │
+          └── Tier 2: Semantic / LLM Fallback (Invoked only on ambiguous queries)
+                      Lightweight structured classifier maps intent to skill ID
+                      Match Found? ──► Activate SkillPackage
+                                            │
+                                            ▼
+                           [Progressive Disclosure Flow]
+                           ├── System Prompt: Hydrate declarative SOP only
+                           └── Dispatcher: Dynamically mount skill tool callables
+```
+
+### 1. Key Architectural Principles
+- **Tier 1 Fast Path**: Over 70% of standard user commands match predefined trigger keywords. Bypassing the LLM for routing saves hundreds of milliseconds and thousands of API calls daily.
+- **Progressive Disclosure**: Only the active skill's Standard Operating Procedure (`SKILL.md`) and tool schemas enter prompt context. Underlying execution code is never shown to the LLM.
+- **Zero-Friction Fallback**: If routing produces zero confident matches, the agent degrades gracefully to default conversational assistance.
+
+---
+
+## 10. Sub-Agent Execution Engine & Context Sandboxing Pattern
+
+**[2026-11-23]**  
+*Source: `projects/Agents/core/subagent.py`*
+
+When an agent needs to execute a complex multi-turn task (e.g., iterative SQL exploration, multi-step code refactoring, or document auditing), running those intermediate turns inside the primary conversation pollutes the parent's context window with temporary errors and noisy tool outputs.
+
+The architecture solves this via **Context Sandboxing with Sub-Agent Tool Bridging**:
+
+```
+[Parent Agent Loop]
+        │
+        ├── LLM issues Tool Call: delegate_to_data_analyst(task="...")
+        │           │
+        │           ▼
+        │   [Async Tool Dispatcher Bridge]
+        │           │
+        │           ▼
+        │   [SkillSubAgent Isolated ReAct Loop]
+        │   ├── Dedicated System Prompt (Skill SOP only)
+        │   ├── Scoped Dispatcher (Skill tools only)
+        │   ├── Safety Ceilings:
+        │   │     ├── max_loops (Hard loop limit, Rule 1)
+        │   │     ├── timeout_seconds (asyncio.wait_for, Rule 4)
+        │   │     └── RepetitionDetector (Non-consecutive error cycle abort)
+        │   └── Multi-turn Execution & Final Synthesis
+        │           │
+        │           ▼
+        └── Tool Result: "Users table has 4 columns: id, name, email, created_at."
+            (Parent context receives ONLY the clean final summary!)
+```
+
+### 1. Key Architectural Principles
+- **Sub-Agent as an Async Tool**: The entire sub-agent lifecycle is encapsulated as a standard async tool function on the parent dispatcher.
+- **Concurrent Sub-Agents**: Because tools run asynchronously through `AsyncToolDispatcher`, the parent agent can launch multiple sub-agents concurrently (e.g. `delegate_to_data_analyst` and `delegate_to_security_scanner` running in parallel via `asyncio.gather`).
+- **Complete Context Isolation**: Child reasoning turns, intermediate errors, and raw outputs are completely sandboxed. The parent agent's context receives strictly the final synthesized answer.
+
+
+
+
 

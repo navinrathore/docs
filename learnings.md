@@ -291,6 +291,23 @@ This document records practical lessons learned, operational gotchas, and debugg
   - Regex patterns using simple ```` ```.*?``` ```` prematurely terminate at the first 3 inner backticks.
   - *Fix*: Use named backreferences in regular expressions: `(?P<ticks>`{3,})(?:[a-zA-Z0-9_-]+)?\n(?P<code>[\s\S]*?)\n(?P=ticks)` so an opening 4-backtick fence strictly requires a closing 4-backtick fence to terminate.
 
+---
+
+## 16. NL-to-SQL Agent: Reusing Battle-Tested Libraries vs. Custom ReAct Traps
+
+**[2026-11-24]**  
+*Source: `projects/Agents` (`specs/2026-11-24-database-agent`)*
+
+- **The Reinvention Trap at Lower Layers**:
+  - Attempting custom dialect inspection for schema discovery (querying `PRAGMA table_info` for SQLite and `information_schema` / `pg_catalog` for Postgres) results in subtle bugs with complex primary keys, foreign keys, or enum types.
+  - Attempting regex-based SQL validation fails catastrophically against SQL injection, comments (`--`, `/* */`), subqueries, and dialect-specific keywords.
+  - *Rule*: Always delegate Layer 1 (connection/introspection) to `SQLAlchemy` and Layer 2 (AST parsing/transpilation/sanitization) to `sqlglot`.
+- **The Token Tax of Canned SQL Agent Frameworks**:
+  - Off-the-shelf NL-to-SQL agents (such as naive LangChain SQL chains or external frameworks) often dump full database schemas and raw table dumps into prompts every conversational turn, destroying prompt caching and multiplying token costs by 5x-10x.
+  - Furthermore, when queries fail, naive frameworks re-send the entire chat history instead of an isolated error diff.
+  - *Remedy*: In Layer 3, use a clean in-core ReAct loop that keeps static DDL cached, executes a bounded retry loop (max 3-5 iterations), and sends only the exact database exception and offending table schema during error recovery.
+
+
 
 
 

@@ -496,6 +496,41 @@ Implement **in-process Directed Acyclic Graph (DAG) pipelining** directly in the
 ### Universal Declarative Portability (`ConfigurablePipelineRunner`)
 A decoupled execution engine that any project in this repository can instantiate to execute YAML/JSON declarative pipeline files with environment variable expansion (`${VAR:-default}`) and zero LLM overhead.
 
+---
+
+## 16. Layered Library Reuse & Custom Boundary (NL-to-SQL / Database Agent)
+
+**[2026-11-24]**  
+*Source: `projects/Agents` (`specs/2026-11-24-database-agent`)*
+
+When architecting domain-specific data and tool agents (specifically Natural Language to SQL / Database Agents), adhere to the **Three-Layer Reuse Boundary**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Layer 3: Agent Orchestration & Self-Correction (ReAct Loop) │
+│ - Lightweight, in-core supervisory ReAct loop by default    │
+│ - Pluggable choice via BaseDatabaseAgent interface          │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Layer 2: SQL AST Parsing & Sanitization (MANDATORY LIBRARY) │
+│ - sqlglot for statement validation (SELECT/WITH only)       │
+│ - Zero-token deterministic transpilation & safety limits    │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Layer 1: Schema Introspection & DB Engine (MANDATORY LIB)   │
+│ - SQLAlchemy for dialect reflection & connection pooling    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+1. **Layer 1 (Schema & DB Engine)**: ALWAYS reuse standard database abstraction libraries (`SQLAlchemy`). Do not write manual introspection scripts using raw driver queries (`PRAGMA table_info` or `pg_catalog`).
+2. **Layer 2 (AST & Sanitization)**: ALWAYS reuse battle-tested SQL AST libraries (`sqlglot`). Do not use regex or custom string matching for query validation or mutation protection.
+3. **Layer 3 (Agent Orchestration & Error Recovery)**: Keep the default implementation lightweight and in-core. External agent frameworks (LangChain SQL, Vanna.ai) introduce massive prompt bloat and uncontrolled loops; our core ReAct loop enforces strict prompt caching (static DDL schemas) and hard circuit breakers (`max_loops = 3-5`), while remaining pluggable via `BaseDatabaseAgent`.
+
+
 
 
 

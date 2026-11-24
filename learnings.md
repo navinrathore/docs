@@ -4,6 +4,25 @@ This document records practical lessons learned, operational gotchas, and debugg
 
 ---
 
+## 11. In-Process DAG Execution vs. Conversational Tool Chaining
+
+**[2026-11-24]**  
+*Source: `projects/Agents` (`core/chain.py` & `core/dispatcher.py`)*
+
+- **The Latency Trap of ReAct Loops for Dependent Tools**:
+  In standard ReAct loops, dependent tools ($A \to B \to C$) require separate LLM turns for each hop. Each turn re-submits the entire prompt context, schema catalog, and accumulated conversation history to the model, adding 1.5–5.0 seconds of latency and hundreds of tokens per step.
+- **In-Process DAG Wave Resolution**:
+  Providing an explicit pipeline execution engine (`ToolPipelineEngine`, `ConfigurablePipelineRunner`) allows the LLM (or a static YAML config) to emit an entire dependent workflow in a single turn. 
+- **Key Implementation Invariants**:
+  1. **Kahn's Algorithm Cycle Rejection**: Always validate dependencies topologically before executing step 1; reject cycles or self-referential dependencies immediately with clear validation errors.
+  2. **Topological Wave Execution**: Independent sibling steps (in-degree = 0) must run concurrently via `asyncio.gather` bounded by a semaphore.
+  3. **Preserving Typed Objects**: Downstream tools often require structured objects (lists of dicts, integers, dataframes) rather than string-serialized JSON. Store and propagate both `raw_output` (native Python object) and string-formatted `result` through `ToolExecutionResult`.
+  4. **Strict Error Isolation Policies**: Give callers control over failure boundaries:
+     - `halt`: Aborts immediately upon any step failure.
+     - `skip_dependents`: Skips child steps that depend on the failed node while allowing independent sibling branches to complete cleanly.
+
+---
+
 ## 1. LangGraph Checkpointing & StateGraph Execution Mechanics
 
 **[2026-10-30]**  

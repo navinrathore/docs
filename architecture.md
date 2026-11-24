@@ -17,6 +17,7 @@ This document records overarching architectural decisions, design patterns, and 
 12. [Declarative OpenAPI Tool Auto-Ingestion & Schema Synthesis](#12-declarative-openapi-tool-auto-ingestion--schema-synthesis)
 13. [Deterministic Code Sanitization & AST Syntax Verification](#13-deterministic-code-sanitization--ast-syntax-verification)
 14. [Non-Consecutive Cyclic Repetition Detection](#14-non-consecutive-cyclic-repetition-detection)
+15. [Nested / Chained Tool Calling & In-Process DAG Execution](#15-nested--chained-tool-calling--in-process-dag-execution)
 
 ---
 
@@ -458,6 +459,43 @@ Agent Tool Output
 - **Normalization Before Hashing**: Strips timestamps, memory addresses (e.g., `<object at 0x7f...>`), and variable whitespace before hashing so identical semantic errors produce identical SHA-256 digests.
 - **Non-Consecutive Detection**: By tracking hash frequencies across an in-memory sliding window (`deque(maxlen=window_size)` + `collections.Counter`), multi-step cycles ($A \rightarrow B \rightarrow A \rightarrow B$) are caught reliably regardless of sequence order.
 - **Loop Circuit Breaker**: Once the repetition threshold is breached, the loop terminates immediately with an actionable warning, preventing token burn and API rate-limiting (enforcing Rule 1 and Rule 9).
+
+---
+
+## 15. Nested / Chained Tool Calling & In-Process DAG Execution
+
+**[2026-11-24]**  
+*Source: `projects/Agents` (`core/chain.py` & `core/dispatcher.py`)*
+
+### Context & Problem Statement
+In traditional ReAct architectures, executing a sequence of dependent tools ($A \to B \to C$) forces the agent through multiple round-trip LLM inference calls. Each hop incurs 1.5–5.0 seconds of latency and burns input tokens re-submitting the system prompt, tool definitions, and chat history.
+
+### Architectural Solution
+Implement **in-process Directed Acyclic Graph (DAG) pipelining** directly in the tool dispatch layer:
+
+```
+[LLM Single Turn Call]
+        │
+        ▼
+[execute_tool_pipeline] (or nested {"$tool": ...})
+        │
+        ├── 1. Kahn's Cycle Detection & Topological Sorting
+        │      └── Groups steps into execution waves (Wave 0: in_degree=0)
+        │
+        ├── 2. Parallel Wave Execution (asyncio.gather + Semaphore)
+        │      └── Independent tools in the same wave run concurrently
+        │
+        ├── 3. Dynamic Template Interpolation ({{steps.<id>.output.<path>}})
+        │      └── Resolves JSON/dot-path outputs into downstream inputs
+        │
+        └── 4. Typed Output Propagation & Failure Shielding
+               ├── Preserves raw objects (lists, dicts, primitives)
+               └── Enforces 'halt' vs. 'skip_dependents' error policies
+```
+
+### Universal Declarative Portability (`ConfigurablePipelineRunner`)
+A decoupled execution engine that any project in this repository can instantiate to execute YAML/JSON declarative pipeline files with environment variable expansion (`${VAR:-default}`) and zero LLM overhead.
+
 
 
 

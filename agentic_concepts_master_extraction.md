@@ -209,8 +209,7 @@
 - **Gaps**: 
   - ~~No parallel tool calling~~: ✅ **Implemented** via `core/dispatcher.py` (`AsyncToolDispatcher`) with bounded semaphore concurrency (`max_concurrency`), configurable sequential/parallel execution toggle, per-tool timeout/fault-shielding, and native MCP async tool bridging.
   - ~~No OpenAPI spec integration~~: ✅ **Implemented** via `core/openapi_loader.py` (`OpenAPIToolLoader`) with configurable direct 1:1, generic meta-runner (`call_api`), tag filtering, and read-only safety guardrails.
-  - No **nested/chained tool calls** (output of one tool fed as input to another within a single turn).
-  - No **OpenAPI spec integration** (auto-generating tool schemas from API specifications) — 🟡 *Tracked in Agents backlog*.
+  - ~~No nested/chained tool calls~~: ✅ **Implemented** via `core/chain.py` (`ToolPipelineEngine`) with DAG topological wave execution, cycle detection, dot-path reference interpolation (`{{steps.<id>.output.<path>}}`), error halting strategies (`halt`, `skip_dependents`, `continue`), and nested dict call unrolling (`{"$tool": ..., "$input": ...}`).
 - **Importance**: 🟠 High | **Complexity**: ⭐⭐⭐
 - **Video**: Watch _Function-Calling & Data Extraction_ **Lessons 4-5** (parallel function calls, OpenAPI spec integration).
 
